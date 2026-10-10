@@ -199,3 +199,72 @@ def feedback_for(report_id: int) -> dict:
     with _cursor() as cur:
         cur.execute(_sql("SELECT category, verdict FROM feedback WHERE report_id = :r"), {"r": report_id})
         return {r["category"]: r["verdict"] for r in _rows(cur)}
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard stats (computed in Python so the SQL stays portable)
+# ---------------------------------------------------------------------------
+def admin_stats(limit: int = 500) -> dict:
+    with _cursor() as cur:
+        cur.execute(_sql("SELECT id, created_at, mode, ai_error, overall_confidence, confidence_label, explained_share, "
+                         "n_drivers, n_volume, n_price, n_timing, n_anomaly, n_unexplained, n_hypotheses, numbers_rejected, "
+                         "claims_moved, class_conflicts, latency_ms, tokens_in, tokens_out, cost_usd, result_json "
+                         "FROM reports ORDER BY id DESC LIMIT :n"), {"n": limit})
+        rows = _rows(cur)
+        cur.execute(_sql("SELECT verdict, classification, source FROM feedback"))
+        fb = _rows(cur)
+
+    def avg(xs):
+        xs = [x for x in xs if x is not None]
+        return sum(xs) / len(xs) if xs else None
+
+    ai_rows = [r for r in rows if r["mode"] == "ai"]
+    failed = [r for r in rows if r["mode"] != "ai" and r["ai_error"] and not str(r["ai_error"]).startswith("no ")]
+    attempted = len(ai_rows) + len(failed)
+
+    open_items = {}
+    for r in rows:
+        try:
+            res = json.loads(r["result_json"])
+        except (TypeError, ValueError):
+            continue
+        for d in res.get("drivers", []):
+            if d.get("classification") in ("unexplained", "anomaly"):
+                open_items[d["category"]] = open_items.get(d["category"], 0) + 1
+
+    def fb_by(key):
+        out = {}
+        for f in fb:
+            d = out.setdefault(f[key] or "unknown", {"accurate": 0, "wrong_cause": 0})
+            d[f["verdict"]] += 1
+        for d in out.values():
+            d["total"] = d["accurate"] + d["wrong_cause"]
+            d["wrong_rate"] = d["wrong_cause"] / d["total"] if d["total"] else 0
+        return out
+
+    acc = sum(1 for f in fb if f["verdict"] == "accurate")
+    wrong = sum(1 for f in fb if f["verdict"] == "wrong_cause")
+    labels = {"High": 0, "Medium": 0, "Low": 0}
+    for r in rows:
+        if r["confidence_label"] in labels:
+            labels[r["confidence_label"]] += 1
+    return {
+        "total": len(rows), "ai_count": len(ai_rows), "logic_only": len(rows) - len(ai_rows),
+        "ai_failures": len(failed), "ai_success_rate": len(ai_rows) / attempted if attempted else None,
+        "recent_errors": [{"id": r["id"], "created_at": r["created_at"], "error": r["ai_error"]} for r in failed[:5]],
+        "avg_latency_ms": avg([r["latency_ms"] for r in ai_rows]),
+        "total_cost": sum(r["cost_usd"] or 0 for r in rows), "avg_cost": avg([r["cost_usd"] for r in ai_rows]),
+        "tokens_in": sum(r["tokens_in"] or 0 for r in rows), "tokens_out": sum(r["tokens_out"] or 0 for r in rows),
+        "avg_confidence": avg([r["overall_confidence"] for r in rows]),
+        "avg_explained": avg([r["explained_share"] for r in rows]),
+        "confidence_labels": labels,
+        "class_mix": {k: sum(r[f"n_{k}"] or 0 for r in rows) for k in ("volume", "price", "timing", "anomaly", "unexplained")},
+        "numbers_rejected": sum(r["numbers_rejected"] or 0 for r in rows),
+        "claims_moved": sum(r["claims_moved"] or 0 for r in rows),
+        "class_conflicts": sum(r["class_conflicts"] or 0 for r in rows),
+        "hypotheses": sum(r["n_hypotheses"] or 0 for r in rows),
+        "open_items": sorted(open_items.items(), key=lambda kv: -kv[1])[:6],
+        "feedback_total": acc + wrong, "feedback_accurate": acc,
+        "wrong_rate": wrong / (acc + wrong) if (acc + wrong) else None,
+        "fb_by_class": fb_by("classification"), "fb_by_source": fb_by("source"),
+    }

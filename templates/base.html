@@ -13,6 +13,7 @@
       <nav class="nav">
         <a href="{{ url_for('index') }}" class="{{ 'active' if active == 'new' }}">New report</a>
         <a href="{{ url_for('history') }}" class="{{ 'active' if active == 'history' }}">Saved reports</a>
+        <a href="{{ url_for('admin') }}" class="{{ 'active' if active == 'admin' }}">Admin</a>
       </nav>
     </div>
   </header>

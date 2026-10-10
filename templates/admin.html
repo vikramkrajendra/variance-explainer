@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% macro pctv(x) %}{% if x is none %}—{% else %}{{ (x * 100)|round|int }}%{% endif %}{% endmacro %}
+{% block content %}
+<div class="actions" style="justify-content:space-between">
+  <div><h1>Admin dashboard</h1>
+    <p class="lede" style="margin-bottom:12px">Usage, AI health and cost — and the number that matters most: how often a stated cause turns out to be wrong.</p></div>
+  <a class="btn secondary small" href="{{ url_for('admin_logout') }}">Sign out</a>
+</div>
+
+<div class="actions" style="margin-bottom:16px">
+  {% if status.ai_configured %}<span class="tag mode-ai">AI configured · {{ status.model }}</span>
+  {% else %}<span class="tag mode-rules">AI not configured — logic-only mode (set OPENAI_API_KEY)</span>{% endif %}
+  <span class="tag plain">Database · {{ status.db }}</span>
+  {% if status.default_pw %}<span class="tag mode-rules">Default admin password in use</span>{% endif %}
+</div>
+
+<div class="grid4" style="margin-bottom:14px">
+  <div class="stat"><div class="k">Reports</div><div class="v">{{ s.total }}</div>
+    <div class="s">{{ s.ai_count }} AI-written · {{ s.logic_only }} logic-only</div></div>
+  <div class="stat"><div class="k">AI success rate</div><div class="v">{{ pctv(s.ai_success_rate) }}</div>
+    <div class="s">{{ s.ai_failures }} failure(s) fell back to logic</div></div>
+  <div class="stat"><div class="k">Avg AI latency</div>
+    <div class="v">{% if s.avg_latency_ms is not none %}{{ (s.avg_latency_ms / 1000)|round(1) }}s{% else %}—{% endif %}</div>
+    <div class="s">One LLM call per report</div></div>
+  <div class="stat"><div class="k">AI cost to date</div><div class="v">${{ '%.4f'|format(s.total_cost) }}</div>
+    <div class="s">{% if s.avg_cost %}≈ ${{ '%.4f'|format(s.avg_cost) }} / report · {% endif %}{{ '{:,}'.format(s.tokens_in) }} in / {{ '{:,}'.format(s.tokens_out) }} out</div></div>
+</div>
+<div class="grid4" style="margin-bottom:18px">
+  <div class="stat"><div class="k">Wrong-cause rate</div>
+    <div class="v {% if s.wrong_rate is not none %}{{ 'conf-high' if s.wrong_rate <= 0.05 else 'conf-medium' if s.wrong_rate <= 0.15 else 'conf-low' }}{% endif %}">{{ pctv(s.wrong_rate) }}</div>
+    <div class="s">{{ s.feedback_total - s.feedback_accurate }} of {{ s.feedback_total }} rated drivers · target ≤ 5%</div></div>
+  <div class="stat"><div class="k">Avg variance explained</div><div class="v">{{ pctv(s.avg_explained) }}</div>
+    <div class="s">Share backed by price/volume, YTD or notes</div></div>
+  <div class="stat"><div class="k">Avg confidence</div><div class="v">{{ pctv(s.avg_confidence) }}</div>
+    <div class="s">High {{ s.confidence_labels.High }} · Med {{ s.confidence_labels.Medium }} · Low {{ s.confidence_labels.Low }}</div></div>
+  <div class="stat"><div class="k">AI statements blocked</div><div class="v">{{ s.numbers_rejected + s.claims_moved }}</div>
+    <div class="s">{{ s.numbers_rejected }} wrong numbers · {{ s.claims_moved }} unsupported causes</div></div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Driver classifications</h2>
+    {% set maxc = [s.class_mix.values()|max, 1]|max %}
+    {% for k, v in s.class_mix.items() %}
+    <div class="hbar"><span>{{ classes[k] }}</span><span class="track"><i class="{{ k }}" style="width: {{ (v / maxc * 100)|round|int }}%"></i></span><span class="num">{{ v }}</span></div>
+    {% endfor %}
+  </div>
+  <div class="panel">
+    <h2>Trust layer at work</h2>
+    <ul class="list-clean">
+      <li><b>{{ s.numbers_rejected }}</b> number(s) in AI text didn't match the data and were removed</li>
+      <li><b>{{ s.claims_moved }}</b> cause(s) without evidence moved to “Hypotheses — not supported by data”</li>
+      <li><b>{{ s.class_conflicts }}</b> time(s) the AI disagreed with a data-based classification — the data won</li>
+      <li><b>{{ s.hypotheses }}</b> hypothesis(es) shown to analysts as things to verify, not facts</li>
+    </ul>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Repeatedly unexplained categories</h2>
+    <p class="notice" style="margin-top:-6px">Categories that keep landing as Unexplained or Anomaly — fix the data feed or ask owners for notes.</p>
+    {% if s.open_items %}
+      {% set maxo = s.open_items[0][1] %}
+      {% for cat, v in s.open_items %}
+      <div class="hbar"><span>{{ cat }}</span><span class="track"><i class="unexplained" style="width: {{ (v / maxo * 100)|round|int }}%"></i></span><span class="num">{{ v }}</span></div>
+      {% endfor %}
+    {% else %}<div class="empty">None yet.</div>{% endif %}
+  </div>
+  <div class="panel">
+    <h2>Invented-cause monitor</h2>
+    <p class="notice" style="margin-top:-6px">From analyst ratings. A high wrong-cause rate for AI text means the trust rules need tightening.</p>
+    {% if s.feedback_total %}
+    <table class="tbl">
+      <tr><th>Segment</th><th>Rated</th><th>Wrong cause</th></tr>
+      {% for k, d in s.fb_by_source.items() %}
+      <tr><td>{{ {'ai': 'AI-written (verified)', 'ai_fallback': 'AI failed check → template', 'template': 'Logic template'}.get(k, k) }}</td><td>{{ d.total }}</td>
+        <td class="{{ 'conf-low' if d.wrong_rate > 0.05 else 'conf-high' }}"><b>{{ pctv(d.wrong_rate) }}</b></td></tr>
+      {% endfor %}
+      {% for k, d in s.fb_by_class.items() %}
+      <tr><td><span class="tag {{ k }}">{{ classes.get(k, k) }}</span></td><td>{{ d.total }}</td>
+        <td class="{{ 'conf-low' if d.wrong_rate > 0.05 else 'conf-high' }}"><b>{{ pctv(d.wrong_rate) }}</b></td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<div class="empty">No ratings yet. Analysts rate each driver 👍 / 👎 on the report page.</div>{% endif %}
+  </div>
+</div>
+
+{% if s.recent_errors %}
+<div class="panel">
+  <h2>Recent AI failures</h2>
+  <ul class="list-clean">{% for e in s.recent_errors %}
+    <li><a href="{{ url_for('view_report', report_id=e.id) }}">#{{ e.id }}</a> · {{ e.created_at }} · {{ e.error }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="panel table-scroll">
+  <h2>Recent reports</h2>
+  {% if rows %}
+  <table class="tbl">
+    <tr><th>#</th><th>Report</th><th>Mode</th><th class="num">Net vs fcst</th><th>Explained</th><th>Confidence</th><th>Blocked</th><th>Latency</th><th>Cost</th><th></th></tr>
+    {% for a in rows %}
+    <tr>
+      <td class="mono">{{ a.id }}</td>
+      <td><a href="{{ url_for('view_report', report_id=a.id) }}">{{ a.title }}</a><div class="notice">{{ a.period or '' }} · {{ a.created_at }}</div>
+        {% if a.ai_error %}<div class="notice conf-low">{{ a.ai_error }}</div>{% endif %}</td>
+      <td>{% if a.mode == 'ai' %}<span class="tag mode-ai">AI</span>{% else %}<span class="tag mode-rules">Logic</span>{% endif %}</td>
+      <td class="num {{ 'pos' if a.net_variance >= 0 else 'neg' }}">{{ a.net_variance|money(a.currency) }}</td>
+      <td>{{ ((a.explained_share or 0) * 100)|round|int }}%</td>
+      <td class="conf-{{ (a.confidence_label or 'low')|lower }}">{{ a.confidence_label }}</td>
+      <td>{{ (a.numbers_rejected or 0) + (a.claims_moved or 0) }}</td>
+      <td>{% if a.latency_ms is not none %}{{ (a.latency_ms / 1000)|round(1) }}s{% else %}—{% endif %}</td>
+      <td>{% if a.cost_usd %}${{ '%.4f'|format(a.cost_usd) }}{% else %}—{% endif %}</td>
+      <td><form method="post" action="{{ url_for('admin_delete', report_id=a.id) }}" onsubmit="return confirm('Delete report #{{ a.id }}? This cannot be undone.')">
+        <button class="btn danger small" type="submit">Delete</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">No reports yet.</div>{% endif %}
+</div>
+{% endblock %}

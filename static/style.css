@@ -178,11 +178,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 @media (max-width: 640px) { .brand span { display: none; } .topbar .wrap { gap: 12px; } }
 
 /* ---------- variance-specific ---------- */
-.grid-input { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; }
+.grid-input { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1060px; table-layout: fixed; }
 .grid-input th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); text-align: left; padding: 6px 4px; font-weight: 600; }
 .grid-input th small { display: block; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .grid-input td { padding: 3px 3px; vertical-align: top; }
-.grid-input input, .grid-input select { padding: 7px 8px; font-size: 13px; border-radius: 6px; }
+.grid-input input, .grid-input select { padding: 7px 6px; font-size: 13px; border-radius: 6px; width: 100%; }
 .grid-input input.num { text-align: right; font-variant-numeric: tabular-nums; }
 .grid-input td.err input { border-color: var(--bad); background: var(--bad-soft); }
 .row-del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 6px; }
