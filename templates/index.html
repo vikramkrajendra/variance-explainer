@@ -81,6 +81,20 @@
 </div>
 </form>
 
+{% if recent %}
+<div class="panel" style="margin-top:18px">
+  <div class="actions" style="justify-content:space-between"><h2 style="margin:0">Recent reports</h2><a href="{{ url_for('history') }}">View all →</a></div>
+  <table class="tbl" style="margin-top:8px">
+    {% for a in recent %}
+    <tr><td><a href="{{ url_for('view_report', report_id=a.id) }}">{{ a.title }}</a><div class="notice">{{ a.period or '' }} · {{ a.created_at }}</div></td>
+      <td class="num {{ 'pos' if a.net_variance >= 0 else 'neg' }}">{{ a.net_variance|money(a.currency) }}</td>
+      <td>{{ ((a.explained_share or 0) * 100)|round|int }}% explained</td>
+      <td class="conf-{{ (a.confidence_label or 'low')|lower }}">{{ a.confidence_label }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
   <div class="loading-steps" id="loading-step">Validating numbers…</div>

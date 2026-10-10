@@ -12,7 +12,8 @@
   </div>
   <div class="actions">
     {% if r.mode == 'ai' %}<span class="tag mode-ai">AI narrative · verified</span>{% else %}<span class="tag mode-rules">Logic only</span>{% endif %}
-    {% if report_id %}<a class="btn secondary small" href="{{ url_for('export_csv', report_id=report_id) }}">Export CSV</a>{% endif %}
+    {% if report_id %}<a class="btn secondary small" href="{{ url_for('export_csv', report_id=report_id) }}">Export CSV</a>
+    <a class="btn secondary small" href="{{ url_for('index', **{'from': report_id}) }}">Edit &amp; re-run</a>{% endif %}
     <a class="btn secondary small" href="{{ url_for('index') }}">New report</a>
   </div>
 </div>

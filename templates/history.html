@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Saved reports{% endblock %}
+{% block content %}
+<h1>Saved reports</h1>
+<p class="lede">Every report is stored with its inputs, so you can re-open, edit and re-run it — or export the variance table.</p>
+<form method="get" class="actions" style="margin-bottom:14px">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search by title, period or entity" style="max-width:340px">
+  <button class="btn secondary" type="submit">Search</button>
+  {% if q %}<a href="{{ url_for('history') }}">Clear</a>{% endif %}
+</form>
+<div class="panel table-scroll" style="padding:8px 14px">
+  {% if rows %}
+  <table class="tbl">
+    <tr><th>Report</th><th class="num">Net vs forecast</th><th>Drivers</th><th>Explained by data</th><th>Confidence</th><th>Mode</th></tr>
+    {% for a in rows %}
+    <tr>
+      <td><a href="{{ url_for('view_report', report_id=a.id) }}"><b>{{ a.title }}</b></a>
+        <div class="notice">{{ a.period or '' }}{% if a.entity %} · {{ a.entity }}{% endif %} · {{ a.created_at }}</div></td>
+      <td class="num {{ 'pos' if a.net_variance >= 0 else 'neg' }}"><b>{{ a.net_variance|money(a.currency) }}</b><div class="notice">{{ a.net_pct|pct }}</div></td>
+      <td style="white-space:nowrap">
+        {% for k in ['volume','price','timing','anomaly','unexplained'] %}{% if a['n_' ~ k] %}<span class="tag {{ k }}">{{ a['n_' ~ k] }} {{ k }}</span> {% endif %}{% endfor %}
+      </td>
+      <td>{{ ((a.explained_share or 0) * 100)|round|int }}%</td>
+      <td class="conf-{{ (a.confidence_label or 'low')|lower }}"><b>{{ a.confidence_label }}</b> {{ ((a.overall_confidence or 0) * 100)|round|int }}%</td>
+      <td>{% if a.mode == 'ai' %}<span class="tag mode-ai">AI · verified</span>{% else %}<span class="tag mode-rules">Logic only</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">{% if q %}No reports match “{{ q }}”.{% else %}No reports yet. <a href="{{ url_for('index') }}">Create your first →</a>{% endif %}</div>
+  {% endif %}
+</div>
+{% endblock %}

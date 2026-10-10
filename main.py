@@ -1,15 +1,19 @@
 """VarianceLens — Forecast vs Actual Variance Explainer (Flask app entry point)."""
+import csv
+import io
 import os
 from pathlib import Path
 
-from flask import Flask, abort, flash, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, abort, flash, redirect, render_template, request, send_from_directory, url_for
 
+import db
 import logic
 import pipeline
 
 BASE = Path(__file__).parent
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
+db.init_db()
 
 app.jinja_env.filters["money"] = logic.money
 app.jinja_env.filters["pct"] = logic.pct
@@ -41,7 +45,14 @@ def form_ctx(meta=None, rows=None, errors=None, row_errors=None):
 
 @app.route("/")
 def index():
-    return render_template("index.html", **form_ctx())
+    meta, rows = {}, []
+    src = request.args.get("from", type=int)
+    if src:  # re-open a saved report's inputs to edit and re-run
+        rep = db.get_report(src)
+        if rep:
+            meta, rows = rep["input"]["meta"], rep["input"]["rows"]
+            meta = dict(meta, title=(meta.get("title") or "") + " (rev)")
+    return render_template("index.html", **form_ctx(meta, rows), recent=db.list_reports(limit=5))
 
 
 @app.route("/samples/<name>")
@@ -65,7 +76,64 @@ def analyze():
     if not report["ok"]:
         # rejected by the logic-layer gate: no AI call is made on bad data
         return render_template("index.html", **form_ctx(meta, rows, report["errors"], report["row_errors"])), 422
-    return render_template("result.html", **result_ctx(report, meta))
+    try:
+        report_id = db.save_report(meta, rows, report)
+    except Exception as e:  # a storage failure must not lose the analysis
+        app.logger.exception("save failed")
+        flash(f"Report generated, but it couldn't be saved ({type(e).__name__}).", "warn")
+        return render_template("result.html", **result_ctx(report, meta))
+    return redirect(url_for("view_report", report_id=report_id))
+
+
+@app.route("/report/<int:report_id>")
+def view_report(report_id):
+    rep = db.get_report(report_id)
+    if not rep:
+        flash("That report doesn't exist (it may have been deleted).", "error")
+        return redirect(url_for("history"))
+    meta = {k: rep[k] for k in ("title", "period", "entity", "created_at")}
+    return render_template("result.html", **result_ctx(rep["result"], meta, report_id, db.feedback_for(report_id)))
+
+
+@app.route("/report/<int:report_id>/feedback", methods=["POST"])
+def feedback(report_id):
+    rep = db.get_report(report_id)
+    verdict, cat = request.form.get("verdict"), request.form.get("category", "")
+    d = next((d for d in (rep or {}).get("result", {}).get("drivers", []) if d["category"] == cat), None)
+    if not rep or not d or verdict not in ("accurate", "wrong_cause"):
+        flash("Couldn't record that feedback.", "error")
+    else:
+        db.save_feedback(report_id, cat, verdict, d["classification"], d["explanation_source"])
+    return redirect(url_for("view_report", report_id=report_id) + "#drivers")
+
+
+@app.route("/report/<int:report_id>/export.csv")
+def export_csv(report_id):
+    rep = db.get_report(report_id)
+    if not rep:
+        abort(404)
+    r = rep["result"]
+    drivers = {d["category"]: d for d in r["drivers"]}
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["category", "type", "forecast", "actual", "variance", "variance_pct", "profit_impact", "share_of_variance_pct",
+                "material", "classification", "secondary", "confidence", "volume_effect", "price_effect", "explanation"])
+    for row in r["rows"]:
+        d = drivers.get(row["category"], {})
+        w.writerow([row["category"], row["type"], row["forecast"], row["actual"], round(row["variance"], 2),
+                    "" if row["pct"] is None else round(row["pct"], 2), round(row["impact"], 2), round(row["share"] * 100, 2),
+                    row["material"], row.get("classification") or "", d.get("secondary") or "", d.get("confidence") or row.get("confidence") or "",
+                    "" if row.get("volume_effect") is None else round(row["volume_effect"], 2),
+                    "" if row.get("price_effect") is None else round(row["price_effect"], 2), d.get("explanation", "")])
+    name = "".join(ch if ch.isalnum() else "_" for ch in rep["title"])[:60] or "report"
+    return Response(out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={name}_variance.csv"})
+
+
+@app.route("/history")
+def history():
+    q = (request.args.get("q") or "").strip()
+    return render_template("history.html", rows=db.list_reports(q), q=q, active="history")
 
 
 def result_ctx(report, meta, report_id=None, feedback=None):
