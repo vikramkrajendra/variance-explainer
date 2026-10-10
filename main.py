@@ -4,9 +4,15 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, render_template, request, send_from_directory, url_for
 
+import logic
+import pipeline
+
 BASE = Path(__file__).parent
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
+
+app.jinja_env.filters["money"] = logic.money
+app.jinja_env.filters["pct"] = logic.pct
 
 CURRENCIES = ["INR", "USD", "EUR", "GBP", "AUD", "SGD"]
 COLS = ["category", "type", "forecast", "actual", "forecast_units", "actual_units", "ytd_forecast", "ytd_actual", "note"]
@@ -55,8 +61,16 @@ def analyze():
         errors.append("Add at least two categories.")
     if errors:
         return render_template("index.html", **form_ctx(meta, rows, errors)), 400
-    flash(f"Received {len(rows)} categories. The variance engine is added in the next stage.", "info")
-    return render_template("index.html", **form_ctx(meta, rows))
+    report = pipeline.analyze(meta, rows)
+    if not report["ok"]:
+        # rejected by the logic-layer gate: no AI call is made on bad data
+        return render_template("index.html", **form_ctx(meta, rows, report["errors"], report["row_errors"])), 422
+    return render_template("result.html", **result_ctx(report, meta))
+
+
+def result_ctx(report, meta, report_id=None, feedback=None):
+    return dict(r=report, meta=meta, classes=logic.CLASSES, ev={e["id"]: e for e in report["evidence"]},
+                report_id=report_id, feedback=feedback or {}, active="new")
 
 
 if __name__ == "__main__":

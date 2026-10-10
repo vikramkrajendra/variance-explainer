@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}{{ meta.title }}{% endblock %}
+{% set cur = r.settings.currency %}
+{% block content %}
+<div class="actions" style="justify-content:space-between;margin-bottom:6px">
+  <div>
+    <h1>{{ meta.title }}</h1>
+    <div class="notice">
+      {% if meta.period %}{{ meta.period }} · {% endif %}{% if meta.entity %}{{ meta.entity }} · {% endif %}{{ cur }} ·
+      materiality ≥ {{ r.settings.mat_pct|round(1) }}% and ≥ {{ r.settings.mat_abs|money(cur, False) }}{% if meta.created_at %} · {{ meta.created_at }}{% endif %}
+    </div>
+  </div>
+  <div class="actions">
+    {% if r.mode == 'ai' %}<span class="tag mode-ai">AI narrative · verified</span>{% else %}<span class="tag mode-rules">Logic only</span>{% endif %}
+    {% if report_id %}<a class="btn secondary small" href="{{ url_for('export_csv', report_id=report_id) }}">Export CSV</a>{% endif %}
+    <a class="btn secondary small" href="{{ url_for('index') }}">New report</a>
+  </div>
+</div>
+
+<div class="score-row" style="margin-top:16px">
+  <div class="stat"><div class="k">Net vs forecast</div>
+    <div class="v {{ 'pos' if r.totals.net_variance >= 0 else 'neg' }}">{{ r.totals.net_variance|money(cur) }}</div>
+    <div class="s">{{ r.totals.net_pct|pct }} · actual {{ r.totals.net_actual|money(cur, False) }} vs {{ r.totals.net_forecast|money(cur, False) }}</div></div>
+  <div class="stat"><div class="k">Revenue</div>
+    <div class="v {{ 'pos' if r.totals.rev_variance >= 0 else 'neg' }}">{{ r.totals.rev_variance|money(cur) }}</div>
+    <div class="s">{{ r.totals.rev_pct|pct }} vs forecast</div></div>
+  <div class="stat"><div class="k">Costs</div>
+    <div class="v {{ 'neg' if r.totals.cost_variance > 0 else 'pos' }}">{{ r.totals.cost_variance|money(cur) }}</div>
+    <div class="s">{{ r.totals.cost_pct|pct }} vs forecast ({{ 'over' if r.totals.cost_variance > 0 else 'under' }} plan)</div></div>
+  <div class="stat"><div class="k">Confidence</div>
+    <div class="v conf-{{ r.confidence_label|lower }}">{{ r.confidence_label }} · {{ (r.overall_confidence * 100)|round|int }}%</div>
+    <div class="s">{{ (r.totals.explained_share * 100)|round|int }}% of variance explained by data</div></div>
+</div>
+
+{% if r.mode != 'ai' %}
+<div class="alert warn"><b>AI narrative unavailable — showing logic-layer explanations.</b>
+  {% if r.ai and r.ai.error %}Reason: {{ r.ai.error }}.{% endif %} All numbers, drivers and classifications below are still fully calculated from your data.</div>
+{% endif %}
+{% for n in r.notices %}<div class="alert info">{{ n }}</div>{% endfor %}
+
+<div class="panel">
+  <h2>Why did we miss the forecast?</h2>
+  <p class="headline">{{ r.headline }}</p>
+  <p style="margin:0">{{ r.summary }}</p>
+  <ul class="notice" style="margin:10px 0 0 18px;padding:0">{% for c in r.confidence_reasons %}<li>{{ c }}</li>{% endfor %}</ul>
+  <details style="margin-top:12px"><summary class="notice" style="cursor:pointer">Copy for leadership</summary>
+    <textarea class="copybox" id="copybox" readonly style="margin-top:8px">{{ r.headline }}
+
+{{ r.summary }}
+{% for d in r.drivers %}
+• {{ d.category }} ({{ classes[d.classification] }}{% if d.secondary %} + {{ classes[d.secondary]|lower }}{% endif %}, {{ d.impact|money(cur) }}): {{ d.explanation }}{% endfor %}{% if r.hypotheses %}
+
+Not yet confirmed: {% for h in r.hypotheses %}{{ h.category }} — {{ h.hypothesis }}{% if not loop.last %}; {% endif %}{% endfor %}{% endif %}</textarea>
+    <button class="btn secondary small" type="button" onclick="navigator.clipboard.writeText(document.getElementById('copybox').value);this.textContent='Copied ✓'">Copy</button>
+  </details>
+</div>
+
+<div class="panel">
+  <h2>Biggest contributors to the gap</h2>
+  <p class="notice" style="margin-top:-6px">Profit impact by category (revenue above plan and costs below plan are favourable). Bold = material.</p>
+  {% set maxi = [r.rows|map(attribute='impact')|map('abs')|max, 1]|max %}
+  {% for row in r.rows|sort(attribute='share', reverse=True) %}
+  <div class="contrib">
+    <span style="{{ 'font-weight:600' if row.material else 'color:var(--muted)' }}">{{ row.category }}</span>
+    <span class="bars"><span class="axis"></span><i class="{{ 'pos' if row.impact >= 0 else 'neg' }}" style="width: {{ (row.impact|abs / maxi * 50)|round(1) }}%"></i></span>
+    <span class="num {{ 'pos' if row.impact >= 0 else 'neg' }}">{{ row.impact|money(cur) }} <span class="dim">· {{ (row.share * 100)|round|int }}%</span></span>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="panel" id="drivers">
+  <div class="actions" style="justify-content:space-between;margin-bottom:12px">
+    <h2 style="margin:0">Key variance drivers</h2>
+    <div class="legend">{% for k, v in classes.items() %}<span><span class="tag {{ k }}">{{ v }}</span></span>{% endfor %}</div>
+  </div>
+  {% for d in r.drivers %}
+  <div class="issue {{ d.classification }}">
+    <div class="issue-head">
+      <span class="issue-title">#{{ d.rank }} {{ d.category }} <span class="dim" style="font-weight:400">· {{ d.type }}</span></span>
+      <span class="tag {{ d.classification }}">{{ classes[d.classification] }}</span>
+      {% if d.secondary %}<span class="tag {{ d.secondary }}">+ {{ classes[d.secondary] }}</span>{% endif %}
+      <span class="tag {{ 'fav' if d.favourable else 'unfav' }}">{{ d.impact|money(cur) }} · {{ d.pct|pct }}</span>
+    </div>
+    {% if d.volume_effect is not none %}
+      {% set tot = (d.volume_effect|abs) + (d.price_effect|abs) %}
+      <div class="split" title="Volume vs price effect">
+        <i class="v" style="width: {{ ((d.volume_effect|abs) / (tot or 1) * 100)|round(1) }}%"></i><i class="p" style="width: {{ ((d.price_effect|abs) / (tot or 1) * 100)|round(1) }}%"></i>
+      </div>
+      <div class="legend"><span><b style="background:var(--vol)"></b>Volume {{ d.volume_effect|money(cur) }}</span><span><b style="background:var(--price)"></b>Price {{ d.price_effect|money(cur) }}</span></div>
+    {% endif %}
+    <p style="margin:10px 0 6px">{{ d.explanation }}</p>
+    <div class="why-conf">{% if d.explanation_source == 'ai' %}AI-written · every number and cause verified against the data{% elif d.explanation_source == 'ai_fallback' %}AI text failed verification — replaced with the logic-layer explanation{% else %}Logic-layer explanation{% endif %}</div>
+    {% for f in d.flags %}<div class="alert warn" style="margin:8px 0 0;padding:7px 10px;font-size:13px">{{ f }}</div>{% endfor %}
+    <ul class="evidence">
+      {% for eid in d.evidence_ids %}{% set e = ev[eid] %}<li><span class="eid">{{ eid }}</span>{{ e.text }}</li>{% endfor %}
+    </ul>
+    <div class="issue-head" style="margin-top:8px">
+      <div class="confbar" title="Classification confidence">
+        <span>Confidence</span><span class="bar"><i style="width: {{ ((d.confidence or 0.3) * 100)|round|int }}%"></i></span>
+        <b>{{ ((d.confidence or 0.3) * 100)|round|int }}%</b>
+      </div>
+      <span class="why-conf">{{ (d.share * 100)|round|int }}% of total variance</span>
+    </div>
+    {% if report_id %}
+    <div class="feedback">
+      {% set fb = feedback.get(d.category) %}
+      {% if fb %}<span class="done">✓ Marked {{ 'accurate' if fb == 'accurate' else 'cause is wrong' }}</span>
+      {% else %}<span>Is this explanation right?</span>
+        {% for v, l in [('accurate', '👍 Accurate'), ('wrong_cause', '👎 Cause is wrong')] %}
+        <form method="post" action="{{ url_for('feedback', report_id=report_id) }}">
+          <input type="hidden" name="category" value="{{ d.category }}"><input type="hidden" name="verdict" value="{{ v }}">
+          <button type="submit">{{ l }}</button></form>
+        {% endfor %}
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% else %}<div class="empty">No material variances — actuals are within your materiality thresholds.</div>{% endfor %}
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Hypotheses — not supported by data</h2>
+    <p class="notice" style="margin-top:-6px">Possible causes the data can't confirm. Don't present these as facts.</p>
+    {% for h in r.hypotheses %}
+    <div class="hyp"><b>{{ h.category }}</b> — {{ h.hypothesis }}{% if h.data_to_confirm %}<div class="notice">To confirm: {{ h.data_to_confirm }}</div>{% endif %}
+      {% if h.source %}<div class="why-conf">{{ h.source }}</div>{% endif %}</div>
+    {% else %}<div class="empty">{% if r.mode == 'ai' %}None — every stated cause is backed by evidence.{% else %}AI layer not used.{% endif %}</div>{% endfor %}
+  </div>
+  <div class="panel">
+    <h2>Data to request before the review</h2>
+    {% if r.data_requests %}
+    <ul class="list-clean">{% for q in r.data_requests %}<li><b>{{ q.category }}</b><div class="notice">{{ q.ask }}</div></li>{% endfor %}</ul>
+    {% else %}<div class="empty">Nothing — every driver is explained by the data provided.</div>{% endif %}
+  </div>
+</div>
+
+<div class="panel table-scroll">
+  <h2>Full variance table</h2>
+  <table class="tbl">
+    <tr><th>Category</th><th>Type</th><th class="num">Forecast</th><th class="num">Actual</th><th class="num">Variance</th><th class="num">%</th><th class="num">Profit impact</th><th class="num">Share</th><th>Class</th></tr>
+    {% for row in r.rows %}
+    <tr class="{{ 'material' if row.material }}">
+      <td>{{ row.category }}{% if not row.material %} <span class="dim">· immaterial</span>{% endif %}</td><td>{{ row.type }}</td>
+      <td class="num">{{ row.forecast|money(cur, False) }}</td><td class="num">{{ row.actual|money(cur, False) }}</td>
+      <td class="num">{{ row.variance|money(cur) }}</td><td class="num">{{ row.pct|pct }}</td>
+      <td class="num {{ 'pos' if row.impact >= 0 else 'neg' }}">{{ row.impact|money(cur) }}</td>
+      <td class="num">{{ (row.share * 100)|round(1) }}%</td>
+      <td>{% if row.classification %}<span class="tag {{ row.classification }}">{{ classes[row.classification] }}</span>{% else %}<span class="dim">—</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="panel">
+  <h2>How this was analyzed</h2>
+  <ol class="trace">
+    <li><div class="layer">Logic layer · validation</div>
+      <b>{{ r.stats.n_rows }} categories validated</b> — {{ r.stats.n_with_units }} with units, {{ r.stats.n_with_ytd }} with YTD, {{ r.stats.n_with_notes }} with notes.</li>
+    <li><div class="layer">Logic layer · calculations</div>
+      <b>Variance, % variance and profit impact</b> computed for every row; {{ r.stats.n_material }} are material
+      (≥ {{ r.settings.mat_pct|round(1) }}% and ≥ {{ r.settings.mat_abs|money(cur, False) }}).</li>
+    <li><div class="layer">Logic layer · biggest contributors</div>
+      <b>{{ r.drivers|length }} driver(s)</b> ranked by profit impact cover {{ (r.totals.drivers_share * 100)|round|int }}% of total variance (Pareto stop at 80%, max 6).</li>
+    <li><div class="layer">Logic layer · evidence + classification</div>
+      <b>{{ r.evidence|length }} evidence item(s)</b> from price/volume splits, YTD offsets, z-score outliers and note keywords. Each driver classified from evidence only; no evidence → Unexplained.
+      <details style="margin-top:6px"><summary class="notice" style="cursor:pointer">Show evidence list</summary>
+        <ul class="evidence">{% for e in r.evidence %}<li><span class="eid">{{ e.id }}</span><b>{{ e.category }}</b> · {{ e.text }}</li>{% endfor %}</ul>
+      </details></li>
+    {% if r.ai and r.ai.called %}
+    <li class="{{ '' if r.ai.ok else 'fail' }}"><div class="layer">AI layer</div>
+      {% if r.ai.ok %}<b>{{ r.ai.model }}</b> wrote the headline, summary and driver explanations from the verified table
+        · {{ (r.ai.latency_ms / 1000)|round(1) }} s · {{ r.ai.tokens_in }} in / {{ r.ai.tokens_out }} out tokens · ≈ ${{ '%.4f'|format(r.ai.cost_usd or 0) }}
+      {% else %}<b>AI call failed</b> — {{ r.ai.error }}. Logic-layer explanations shown instead.{% endif %}</li>
+    {% else %}
+    <li class="skip"><div class="layer">AI layer</div><b>Skipped</b>{% if r.ai and r.ai.error %} — {{ r.ai.error }}{% endif %}.</li>
+    {% endif %}
+    <li><div class="layer">Trust layer</div>
+      {% if r.trust.ai_checked %}
+        <b>{{ r.trust.numbers_checked }} number(s)</b> in AI text checked — {{ r.trust.numbers_rejected }} rejected;
+        {{ r.trust.claims_moved }} unsupported cause(s) moved to hypotheses; {{ r.trust.class_conflicts }} classification conflict(s) resolved in favour of the data;
+        {{ r.trust.fallbacks }} explanation(s) replaced with the logic-layer version.
+      {% else %}Not needed — all text came from the logic layer.{% endif %}</li>
+  </ol>
+</div>
+{% endblock %}
