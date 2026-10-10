@@ -180,6 +180,11 @@ Not yet confirmed: {% for h in r.hypotheses %}{{ h.category }} — {{ h.hypothes
         <b>{{ r.trust.numbers_checked }} number(s)</b> in AI text checked — {{ r.trust.numbers_rejected }} rejected;
         {{ r.trust.claims_moved }} unsupported cause(s) moved to hypotheses; {{ r.trust.class_conflicts }} classification conflict(s) resolved in favour of the data;
         {{ r.trust.fallbacks }} explanation(s) replaced with the logic-layer version.
+        {% if r.trust.blocked %}
+        <details style="margin-top:6px" open><summary class="notice" style="cursor:pointer">Show blocked AI statements ({{ r.trust.blocked|length }})</summary>
+          <table class="tbl" style="margin-top:6px"><tr><th>Where</th><th>AI wrote</th><th>Why it was blocked</th></tr>
+          {% for b in r.trust.blocked %}<tr><td>{{ b.where }}</td><td>“{{ b.text }}”</td><td>{{ b.reason }}</td></tr>{% endfor %}</table>
+        </details>{% endif %}
       {% else %}Not needed — all text came from the logic layer.{% endif %}</li>
   </ol>
 </div>

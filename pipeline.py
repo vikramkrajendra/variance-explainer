@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import time
 
+import ai
 import logic
+import trust
 from logic import money, pct
 
 
@@ -100,7 +102,25 @@ def analyze(meta: dict, rows: list[dict]) -> dict:
         return {"ok": False, "errors": v["errors"], "row_errors": v["row_errors"]}
     cur = comp["settings"]["currency"]
 
-    report = rules_only_report(comp, cur, None)
+    if not ai.available():
+        report = rules_only_report(comp, cur, "no OPENAI_API_KEY is configured")
+    elif not comp["drivers"]:
+        report = rules_only_report(comp, cur, "no material variances to explain, so no AI call was needed")
+    else:
+        try:
+            ai_out = ai.analyze(meta, comp)
+            checked = trust.apply(ai_out, comp, meta, build_drivers(comp))
+            report = {"mode": "ai", "headline": checked["headline"],
+                      "summary": checked["summary"] or template_summary(comp, cur),
+                      "drivers": checked["drivers"], "hypotheses": checked["hypotheses"],
+                      "data_requests": checked["data_requests"], "ai": ai_out["ai"], "trust": checked["trust"],
+                      "notices": []}
+        except ai.AIError as e:
+            report = rules_only_report(comp, cur, str(e))
+            report["ai"]["called"] = True
+        except Exception as e:  # never a blank screen
+            report = rules_only_report(comp, cur, f"unexpected error ({type(e).__name__})")
+            report["ai"]["called"] = True
 
     report.update({"rows": comp["rows"], "evidence": comp["evidence"], "totals": comp["totals"],
                    "stats": comp["stats"], "settings": comp["settings"]})
