@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Why did we miss the forecast?</h1>
+<p class="lede">Enter forecast and actuals by category. VarianceLens calculates the variances, finds the biggest drivers, classifies each one as <b>volume, price, timing or anomaly</b> — and only states causes your data supports.</p>
+
+{% if errors %}
+<div class="alert error">
+  <b>Please fix the data before analysing:</b>
+  <ul style="margin:6px 0 0 18px;padding:0">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('analyze') }}" id="report-form">
+<div class="panel">
+  <h2>Report details</h2>
+  <div class="grid3">
+    <div class="field">
+      <label for="title">Report title <span class="hint">· required</span></label>
+      <input type="text" id="title" name="title" maxlength="120" required value="{{ form.title or '' }}" placeholder="e.g. September close — D2C">
+    </div>
+    <div class="field">
+      <label for="period">Period</label>
+      <input type="text" id="period" name="period" maxlength="20" value="{{ form.period or '' }}" placeholder="e.g. Sep 2026">
+    </div>
+    <div class="field">
+      <label for="entity">Business unit / entity <span class="hint">· optional</span></label>
+      <input type="text" id="entity" name="entity" maxlength="80" value="{{ form.entity or '' }}" placeholder="e.g. India D2C">
+    </div>
+  </div>
+  <div class="grid3">
+    <div class="field">
+      <label for="currency">Currency</label>
+      <select id="currency" name="currency">
+        {% for c in currencies %}<option value="{{ c }}" {{ 'selected' if form.currency == c }}>{{ c }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="mat_pct">Materiality — % variance <span class="hint">· smaller is ignored</span></label>
+      <input type="text" id="mat_pct" name="mat_pct" value="{{ form.mat_pct or '5' }}" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label for="mat_abs">Materiality — absolute amount</label>
+      <input type="text" id="mat_abs" name="mat_abs" value="{{ form.mat_abs or '10000' }}" inputmode="decimal">
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="actions" style="justify-content:space-between;margin-bottom:10px">
+    <div>
+      <h2 style="margin:0">Forecast vs actual by category</h2>
+      <div class="notice">Units, YTD and notes are optional — but they are the <b>evidence</b>. Without them, a cause can't be claimed.</div>
+    </div>
+    <div class="actions">
+      <button class="btn secondary small" type="button" id="load-sample">Load sample (Sep close)</button>
+      <label class="btn secondary small" style="margin:0">Import CSV<input type="file" id="csv-file" accept=".csv,text/csv" hidden></label>
+      <a class="btn secondary small" href="{{ url_for('static_sample', name='template.csv') }}">CSV template</a>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="grid-input" id="grid">
+      <thead><tr>
+        <th style="width:17%">Category</th><th style="width:9%">Type</th>
+        <th class="num">Forecast</th><th class="num">Actual</th>
+        <th class="num">Fcst units<small>optional</small></th><th class="num">Actual units<small>optional</small></th>
+        <th class="num">YTD fcst<small>optional</small></th><th class="num">YTD actual<small>optional</small></th>
+        <th style="width:22%">Analyst note <small>evidence, e.g. "order slipped to Oct 2"</small></th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="actions" style="margin-top:10px">
+    <button class="btn secondary small" type="button" id="add-row">+ Add row</button>
+    <span class="notice" id="row-count"></span>
+  </div>
+</div>
+
+<div class="actions">
+  <button class="btn" type="submit" id="submit-btn">Explain the variance</button>
+  <span class="notice">🔒 Only category totals and notes are sent to the AI — never ledger lines. Reports are saved so you can revisit them.</span>
+</div>
+</form>
+
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <div class="loading-steps" id="loading-step">Validating numbers…</div>
+</div>
+
+<script>
+const COLS = ['category','type','forecast','actual','forecast_units','actual_units','ytd_forecast','ytd_actual','note'];
+const initialRows = {{ rows|tojson }};
+const rowErrors = {{ (row_errors or {})|tojson }};
+const sampleCsv = {{ sample_csv|tojson }};
+const tbody = document.querySelector('#grid tbody');
+
+function cell(name, val, rowIdx) {
+  const td = document.createElement('td');
+  if (name === 'type') {
+    const s = document.createElement('select'); s.name = 'type[]';
+    ['revenue','cost'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t[0].toUpperCase()+t.slice(1); if ((val||'revenue') === t) o.selected = true; s.appendChild(o); });
+    td.appendChild(s);
+  } else {
+    const i = document.createElement('input'); i.type = 'text'; i.name = name + '[]'; i.value = val ?? '';
+    if (!['category','note'].includes(name)) { i.className = 'num'; i.inputMode = 'decimal'; }
+    if (name === 'category') i.placeholder = 'e.g. Online sales';
+    td.appendChild(i);
+  }
+  if (rowErrors[rowIdx] && rowErrors[rowIdx].includes(name)) td.classList.add('err');
+  return td;
+}
+function addRow(r = {}, idx = -1) {
+  const tr = document.createElement('tr');
+  COLS.forEach(c => tr.appendChild(cell(c, r[c], idx)));
+  const td = document.createElement('td'); const b = document.createElement('button');
+  b.type = 'button'; b.className = 'row-del'; b.title = 'Remove row'; b.textContent = '×';
+  b.onclick = () => { tr.remove(); count(); }; td.appendChild(b); tr.appendChild(td);
+  tbody.appendChild(tr); count();
+}
+function count() { document.getElementById('row-count').textContent = tbody.children.length + ' row(s)'; }
+function parseCsv(text) {
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i+1] === '"') { f += '"'; i++; } else if (c === '"') q = false; else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i+1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += c;
+  }
+  if (f !== '' || row.length) { row.push(f); rows.push(row); }
+  const head = rows.shift().map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  return rows.filter(r => r.some(x => x.trim() !== '')).map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] || '').trim()])));
+}
+function load(rows) { tbody.innerHTML = ''; rows.forEach(r => addRow(r)); }
+
+initialRows.length ? initialRows.forEach((r, i) => addRow(r, i)) : [0,1,2].forEach(() => addRow());
+document.getElementById('add-row').onclick = () => addRow();
+document.getElementById('load-sample').onclick = () => {
+  load(parseCsv(sampleCsv));
+  document.getElementById('title').value = 'September close — D2C apparel';
+  document.getElementById('period').value = 'Sep 2026';
+  document.getElementById('entity').value = 'India D2C';
+};
+document.getElementById('csv-file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { try { const rows = parseCsv(rd.result); if (!rows.length || !('forecast' in rows[0])) throw 0; load(rows); }
+                      catch { alert('Could not read that CSV. Use the template columns: ' + COLS.join(', ')); } };
+  rd.readAsText(f);
+};
+document.getElementById('report-form').addEventListener('submit', () => {
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('loading').classList.add('show');
+  const steps = ['Validating numbers…', 'Calculating variances and contributors…', 'Splitting price vs volume, checking timing and anomalies…',
+                 'Asking the AI to write the explanation…', 'Checking every number and cause against your data…'];
+  let i = 0; const el = document.getElementById('loading-step');
+  setInterval(() => { i = Math.min(i + 1, steps.length - 1); el.textContent = steps[i]; }, 1800);
+});
+</script>
+{% endblock %}

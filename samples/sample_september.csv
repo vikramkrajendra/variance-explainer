@@ -1,0 +1,10 @@
+category,type,forecast,actual,forecast_units,actual_units,ytd_forecast,ytd_actual,note
+Online sales,revenue,1200000,1050000,24000,22000,,,"Summer promo extended by 2 weeks with an extra 5% discount"
+Wholesale,revenue,800000,620000,8000,6200,6400000,6390000,"Retailer X order of 1,800 units shipped Oct 2 instead of Sep 28"
+Marketplace,revenue,300000,345000,6000,6000,,,
+COGS,cost,900000,870000,,,,,
+Paid marketing,cost,250000,330000,,,,,
+Freight & shipping,cost,120000,128000,,,,,
+Salaries,cost,400000,402000,,,,,
+Software & tools,cost,50000,95000,,,450000,495000,"Annual analytics licence billed in full this month instead of monthly"
+Travel,cost,30000,88000,,,,,

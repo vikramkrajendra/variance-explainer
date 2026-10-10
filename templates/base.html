@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}VarianceLens{% endblock %} · Variance Explainer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('index') }}">VarianceLens <span>Forecast vs actual explainer</span></a>
+      <nav class="nav">
+        <a href="{{ url_for('index') }}" class="{{ 'active' if active == 'new' }}">New report</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+      {% for cat, m in msgs %}<div class="alert {{ cat }}">{{ m }}</div>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <div class="footer">VarianceLens · logic decides, AI writes, every cause traces to the data.</div>
+</body>
+</html>
